@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Streamlit secrets (never commit the real one)
+.streamlit/secrets.toml
+
+# Env / OS
+.env
+.DS_Store
+Thumbs.db
