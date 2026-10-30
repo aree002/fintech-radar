@@ -2,8 +2,8 @@
 
 These items are representative of real Indian fintech regulatory themes, written
 so the dashboard is fully populated without any API key or network access. They
-are labelled as sample data in the UI. With a live Anthropic key, the radar
-replaces these with current items found by real-time web search.
+are labelled as sample data in the UI. A live scan replaces these with current
+items found by real-time web search.
 """
 from __future__ import annotations
 

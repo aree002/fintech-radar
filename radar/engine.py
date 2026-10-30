@@ -1,9 +1,9 @@
-"""The radar pipeline — turn a scan into an enriched, sorted result."""
+"""The radar pipeline — turn a scan into an enriched, filtered, sorted result."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from .config import DEFAULT_LOOKBACK_DAYS
+from .config import DEFAULT_MAX_CARDS
 from .llm import LLM
 from .schemas import (
     ClientProfile, Impact, LLMRadarItem, RadarItem, RadarResult, Source,
@@ -17,34 +17,66 @@ def scan(
     *,
     llm: LLM,
     sectors: list[str] | None = None,
-    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    start_date: date,
+    end_date: date,
     query: str | None = None,
     client: ClientProfile | None = None,
+    max_cards: int = DEFAULT_MAX_CARDS,
     max_uses: int = 6,
 ) -> RadarResult:
     sectors = [s for s in (sectors or []) if s in VALID_SECTORS]
 
     try:
         raw_items, sources = llm.scan(
-            sectors=sectors, lookback_days=lookback_days, query=query,
-            client=client, max_uses=max_uses,
+            sectors=sectors, start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(), query=query, client=client, max_uses=max_uses,
         )
     except Exception as exc:  # surface a clean message instead of crashing the app
         raise RuntimeError(f"The scan could not be completed: {exc}") from exc
 
-    items = _sort([_enrich(ri, idx, client) for idx, ri in enumerate(raw_items)])
+    items = [_enrich(ri, idx, client) for idx, ri in enumerate(raw_items)]
+
+    # The demo set is a fixed showcase, so the date window only filters live scans.
+    if getattr(llm, "name", "") != "demo":
+        items = [it for it in items if _in_window(it.date, start_date, end_date)]
+
+    # With no sub-sector chosen, show high-impact items so they are not lost in
+    # the noise — topped up with the most recent medium items if there is room.
+    if not sectors:
+        items = _high_first(items, max_cards)
+
+    # If there are still more than we want to show, keep the most recent and
+    # most relevant across all sub-sectors.
+    if len(items) > max_cards:
+        items = sorted(
+            items, key=lambda it: (it.relevance_score, _recency(it.date)), reverse=True,
+        )[:max_cards]
+
+    items = _sort(items)
 
     return RadarResult(
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         engine=getattr(llm, "name", "unknown"),
         web_search_used=getattr(llm, "name", "") != "demo" and bool(sources),
-        lookback_days=lookback_days,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
         sectors=sectors,
         query=query,
         items=items,
         sources=[s for s in sources if s.url],
         stats=_stats(items),
     )
+
+
+def _high_first(items: list[RadarItem], max_cards: int) -> list[RadarItem]:
+    highs = [it for it in items if it.impact_level == Impact.high]
+    if len(highs) >= max_cards:
+        return highs
+    mediums = sorted(
+        (it for it in items if it.impact_level == Impact.medium),
+        key=lambda it: _recency(it.date), reverse=True,
+    )
+    return highs + mediums[: max_cards - len(highs)]
 
 
 def _enrich(ri: LLMRadarItem, idx: int, client: ClientProfile | None) -> RadarItem:
@@ -68,16 +100,35 @@ def _sort(items: list[RadarItem]) -> list[RadarItem]:
         key=lambda it: (
             -it.relevance_score,
             _IMPACT_ORDER.get(it.impact_level, 3),
-            _date_sort_key(it.date),
+            -_recency(it.date),
         ),
     )
 
 
-def _date_sort_key(date_str: str) -> str:
-    # Newer first. Keep only digits, pad, and invert so a plain ascending sort
-    # puts larger (more recent) dates earlier.
-    digits = "".join(c for c in (date_str or "") if c.isdigit()).ljust(8, "0")
-    return "".join(chr(255 - ord(c)) for c in digits)
+def _parse_date(date_str: str) -> date | None:
+    s = (date_str or "").strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m", "%d %B %Y", "%d %b %Y", "%B %Y", "%b %Y", "%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    try:  # last resort: a leading YYYY-MM-DD
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _in_window(date_str: str, start: date, end: date) -> bool:
+    d = _parse_date(date_str)
+    if d is None:
+        return True  # keep undated items rather than silently dropping them
+    return start <= d <= end
+
+
+def _recency(date_str: str) -> int:
+    """Ordinal of the item's date; 0 (oldest) when it cannot be parsed."""
+    d = _parse_date(date_str)
+    return d.toordinal() if d else 0
 
 
 def _stats(items: list[RadarItem]) -> dict[str, int]:

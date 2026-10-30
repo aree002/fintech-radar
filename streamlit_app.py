@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import html
 import os
+from datetime import date, timedelta
 
 import streamlit as st
 
-from radar.config import DEFAULT_LOOKBACK_DAYS
+from radar.config import (
+    DEFAULT_MAX_CARDS, DEFAULT_WINDOW_DAYS, MAX_HISTORY_DAYS, MAX_WINDOW_DAYS,
+)
 from radar.engine import scan
 from radar.llm import default_groq_model, get_llm, list_groq_models
 from radar.schemas import ClientProfile, RadarItem, RadarResult
@@ -182,8 +185,22 @@ with st.sidebar:
         help="Leave empty to cover all areas.",
     )
 
-    lookback = st.slider("Look back (days)", min_value=15, max_value=180,
-                         value=DEFAULT_LOOKBACK_DAYS, step=15)
+    _today = date.today()
+    _min_day = _today - timedelta(days=MAX_HISTORY_DAYS)
+    window = st.date_input(
+        "Date window",
+        value=(_today - timedelta(days=DEFAULT_WINDOW_DAYS), _today),
+        min_value=_min_day, max_value=_today, format="YYYY-MM-DD",
+        help=f"Pick a start and end date, at most {MAX_WINDOW_DAYS} days apart, "
+             "within the last two years.",
+    )
+
+    max_cards = st.number_input(
+        "Max cards to show", min_value=5, max_value=20,
+        value=DEFAULT_MAX_CARDS, step=1,
+        help="When a scan finds more developments than this, the most recent and "
+             "relevant ones are kept.",
+    )
 
     keyword = st.text_input("Keyword filter (optional)", placeholder="e.g. KFS, escrow, DLG")
 
@@ -200,22 +217,40 @@ with st.sidebar:
 # Run
 # --------------------------------------------------------------------------- #
 if run:
-    client = ClientProfile(name=client_name or None, business_types=client_sectors) if client_sectors else None
-    llm = get_llm(provider=provider, groq_key=grq_key, tavily_key=tav_key, model=chosen_model)
-    spinner_msg = "Building the radar from the sample set..." if provider == "demo" \
-        else "Searching for current regulation and building the radar..."
-    try:
-        with st.spinner(spinner_msg):
-            result: RadarResult = scan(
-                llm=llm,
-                sectors=chosen_sectors,
-                lookback_days=lookback,
-                query=keyword or None,
-                client=client,
-            )
-        st.session_state["result"] = result
-    except RuntimeError as exc:
-        st.error(str(exc))
+    # Resolve the date window (date_input gives one date mid-selection, a pair once complete).
+    if isinstance(window, (list, tuple)):
+        start_date = window[0]
+        end_date = window[1] if len(window) > 1 else window[0]
+    else:
+        start_date = end_date = window
+
+    error = None
+    if start_date > end_date:
+        error = "The start date must be on or before the end date."
+    elif (end_date - start_date).days > MAX_WINDOW_DAYS:
+        error = f"Please choose a window of at most {MAX_WINDOW_DAYS} days."
+
+    if error:
+        st.error(error)
+    else:
+        client = ClientProfile(name=client_name or None, business_types=client_sectors) if client_sectors else None
+        llm = get_llm(provider=provider, groq_key=grq_key, tavily_key=tav_key, model=chosen_model)
+        spinner_msg = "Building the radar from the sample set..." if provider == "demo" \
+            else "Searching for current regulation and building the radar..."
+        try:
+            with st.spinner(spinner_msg):
+                result: RadarResult = scan(
+                    llm=llm,
+                    sectors=chosen_sectors,
+                    start_date=start_date,
+                    end_date=end_date,
+                    query=keyword or None,
+                    client=client,
+                    max_cards=int(max_cards),
+                )
+            st.session_state["result"] = result
+        except RuntimeError as exc:
+            st.error(str(exc))
 
 # --------------------------------------------------------------------------- #
 # Results
@@ -228,8 +263,11 @@ if not result:
 
 engine_note = "sample data" if result.engine == "demo" else f"model: {result.engine}"
 search_note = " · web search used" if result.web_search_used else ""
-st.caption(f"Generated {result.generated_at} · {engine_note}{search_note} · "
-           f"last {result.lookback_days} days")
+window_note = "full sample set" if result.engine == "demo" \
+    else f"{result.start_date} to {result.end_date}"
+st.caption(f"Generated {result.generated_at} · {engine_note}{search_note} · {window_note}")
+if not result.sectors:
+    st.caption("No sub-sector selected — showing the highest-impact updates across all areas.")
 
 s = result.stats
 cols = st.columns(5)

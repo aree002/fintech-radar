@@ -47,6 +47,10 @@ class LLMRadarItem(BaseModel):
     action_items: list[str] = Field(description="Short, concrete steps the affected entity should take")
     source_url: str | None = None
     source_title: str | None = None
+    source_index: int | None = Field(
+        default=None,
+        description="1-based number of the search result this item is based on",
+    )
 
 
 class LLMRadar(BaseModel):
@@ -78,7 +82,8 @@ class RadarResult(BaseModel):
     generated_at: str
     engine: str
     web_search_used: bool
-    lookback_days: int
+    start_date: str
+    end_date: str
     sectors: list[str]
     query: str | None = None
     items: list[RadarItem]
