@@ -52,6 +52,7 @@ be checked against the regulator's own notice.
 
 ## Where it could go next
 
-A few natural next steps: saved client profiles so the firm can run the same scan for each client
+Saved client profiles so the firm can run the same scan for each client
 on a schedule, email or Slack alerts when something high-impact appears, and a longer memory so the
 Radar can show how a rule has changed over time rather than just the latest position.
+The tool can also be expanded for different sectors and sub-sectors and be used to stay on top of all updates. 
