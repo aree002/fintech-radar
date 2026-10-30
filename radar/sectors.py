@@ -1,12 +1,31 @@
-"""Fintech sub-sector definitions.
+"""Regulatory category definitions (RBI + SEBI remit).
 
-These drive the UI filters, the client-profile picker, and the sector tags on
-each regulatory item. Kept in one place so the taxonomy is consistent.
+These drive the UI filters, the client-profile picker, and the category tags on
+each regulatory item. Kept in one place so the taxonomy is consistent. The list
+spans financial regulation broadly, not just fintech, since the radar pulls from
+RBI and SEBI's full feeds.
 """
 from __future__ import annotations
 
-# ordered: most active areas first
+# Grouped loosely: banking/RBI first, then payments & fintech, then SEBI/markets.
 SECTORS: dict[str, dict[str, str]] = {
+    # ---- Banking & RBI prudential ----
+    "banking": {
+        "label": "Banking & Prudential",
+        "regulator": "RBI",
+        "blurb": "Banks, capital and prudential norms, licensing, governance.",
+    },
+    "nbfc": {
+        "label": "NBFCs",
+        "regulator": "RBI",
+        "blurb": "Non-banking finance companies, scale-based regulation.",
+    },
+    "monetary_markets": {
+        "label": "Monetary & Markets (RBI)",
+        "regulator": "RBI",
+        "blurb": "Monetary policy, liquidity, G-secs, money and forex markets.",
+    },
+    # ---- Payments & fintech ----
     "digital_lending": {
         "label": "Digital Lending",
         "regulator": "RBI",
@@ -47,25 +66,57 @@ SECTORS: dict[str, dict[str, str]] = {
         "regulator": "FIU-IND / RBI",
         "blurb": "VDA service providers, exchange AML, registration.",
     },
-    "insurtech": {
-        "label": "InsurTech",
-        "regulator": "IRDAI",
-        "blurb": "Digital insurance distribution and web aggregators.",
-    },
-    "wealthtech_sebi": {
-        "label": "WealthTech / Securities",
-        "regulator": "SEBI",
-        "blurb": "Investment platforms, advisers, finfluencer rules.",
-    },
     "cross_border_fema": {
         "label": "Cross-border / FEMA",
         "regulator": "RBI",
         "blurb": "Cross-border payments, PA-CB, FEMA compliance.",
     },
+    # ---- SEBI / capital markets ----
+    "securities_markets": {
+        "label": "Securities Markets (SEBI)",
+        "regulator": "SEBI",
+        "blurb": "General market regulation, trading, settlement, surveillance.",
+    },
+    "listed_companies": {
+        "label": "Listed Companies / LODR",
+        "regulator": "SEBI",
+        "blurb": "Listing obligations, disclosures, takeovers, insider trading.",
+    },
+    "mutual_funds": {
+        "label": "Mutual Funds",
+        "regulator": "SEBI",
+        "blurb": "AMCs, scheme rules, distribution, valuation.",
+    },
+    "market_intermediaries": {
+        "label": "Market Intermediaries",
+        "regulator": "SEBI",
+        "blurb": "Brokers, RAs, investment advisers, custodians, RTAs.",
+    },
+    "fpi_foreign_investment": {
+        "label": "FPIs / Foreign Investment",
+        "regulator": "SEBI",
+        "blurb": "Foreign portfolio investors, registration, KYC, limits.",
+    },
+    "reits_invits": {
+        "label": "REITs / InvITs",
+        "regulator": "SEBI",
+        "blurb": "Real estate and infrastructure investment trusts.",
+    },
+    "wealthtech_sebi": {
+        "label": "WealthTech / Advisers",
+        "regulator": "SEBI",
+        "blurb": "Investment platforms, advisers, finfluencer rules.",
+    },
+    # ---- Cross-cutting ----
     "data_protection": {
         "label": "Data Protection (DPDP)",
         "regulator": "MeitY",
         "blurb": "DPDP Act and Rules obligations for data fiduciaries.",
+    },
+    "enforcement": {
+        "label": "Enforcement & Penalties",
+        "regulator": "RBI / SEBI",
+        "blurb": "Adjudication orders, penalties, directions against entities.",
     },
 }
 

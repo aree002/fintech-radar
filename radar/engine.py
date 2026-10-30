@@ -36,20 +36,20 @@ def scan(
 
     items = [_enrich(ri, idx, client) for idx, ri in enumerate(raw_items)]
 
-    # The demo set is a fixed showcase, so the date window only filters live scans.
-    if getattr(llm, "name", "") != "demo":
-        items = [it for it in items if _in_window(it.date, start_date, end_date)]
-
     # With no sub-sector chosen, show high-impact items so they are not lost in
     # the noise — topped up with the most recent medium items if there is room.
     if not sectors:
         items = _high_first(items, max_cards)
 
-    # If there are still more than we want to show, keep the most recent and
-    # most relevant across all sub-sectors.
+    # If there are more than we want to show, keep the most relevant and recent.
+    # Items inside the chosen window are preferred, but we do not drop everything
+    # outside it — a sparse window should still show the latest developments.
     if len(items) > max_cards:
         items = sorted(
-            items, key=lambda it: (it.relevance_score, _recency(it.date)), reverse=True,
+            items,
+            key=lambda it: (_in_window(it.date, start_date, end_date),
+                            it.relevance_score, _recency(it.date)),
+            reverse=True,
         )[:max_cards]
 
     items = _sort(items)

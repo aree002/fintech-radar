@@ -1,4 +1,3 @@
 streamlit>=1.39
 pydantic>=2.6
-requests>=2.31    # calls Groq (OpenAI-compatible REST) and Tavily
-ddgs>=6.0         # DuckDuckGo web search (Tavily is optional, via requests)
+requests>=2.31    # fetches the RBI/SEBI RSS feeds and calls Groq (OpenAI-compatible REST)

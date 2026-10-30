@@ -36,13 +36,14 @@ The app has two modes, set in the sidebar.
 
 - **Demo** uses a built-in sample set of representative developments. It needs no key and makes no
   API calls, which is handy for showing the app or trying the interface.
-- **Live scan** does the web search itself (DuckDuckGo, no key needed) and then uses Groq to
-  summarise and structure the results. So all you need is a free Groq key.
+- **Live scan** pulls the latest items straight from the RBI and SEBI RSS feeds and uses Groq to
+  summarise, score the impact of, and tag each one. All you need is a free Groq key.
 
-Keeping the search and the model separate is deliberate: This is so the live scan never runs into a
-provider's search-grounding quota.
+Pulling from the regulators' own feeds means every item is real, correctly dated, and linked to its
+exact page. RSS only carries the most recent items (RBI around ten per feed, SEBI around thirty), so
+a live scan covers current regulation rather than deep history.
 
 ## A note
 
 The Radar is a monitoring aid for a qualified lawyer. It points at things worth a closer look. It
-is not legal advice, and in live mode it is only as current as what it can find on the web.
+is not legal advice, and a live scan only covers what the RBI and SEBI feeds currently carry.

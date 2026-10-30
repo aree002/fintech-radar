@@ -1,13 +1,13 @@
-"""The summarising / structuring layer.
+"""The summarising / scoring layer.
 
-The live scan gets its web results from the separate `search` step (DuckDuckGo
-by default, Tavily if a key is set), then uses Groq to turn those results into a
-structured list. `DemoLLM` returns the built-in sample dataset with no key.
+A live scan pulls dated items from the RBI and SEBI RSS feeds (see `feeds.py`),
+then uses Groq to summarise, score the impact of, and tag each one. The feed
+supplies the authoritative title, date, regulator and link; the model only adds
+judgement. `DemoLLM` returns the built-in sample dataset with no key.
 
-Groq is reached over plain HTTP with `requests` (its API is OpenAI-compatible).
-We deliberately avoid the OpenAI SDK: it pulls in a compiled `jiter` extension
-that some locked-down Windows machines block via Application Control, which has
-nothing to do with the scan itself.
+Groq is reached over plain HTTP with `requests` (its API is OpenAI-compatible);
+we avoid the OpenAI SDK because it pulls in a compiled extension that some
+locked-down Windows machines block.
 
 Every engine returns the same thing: (list[LLMRadarItem], list[Source]).
 """
@@ -15,15 +15,16 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from typing import Protocol
 
-from . import search
 from .config import (
-    GROQ_BASE_URL, GROQ_MAX_TOKENS, GROQ_MODEL, MAX_SEARCH_QUERIES, SEARCH_MAX_RESULTS,
+    ENRICH_CAP, ENRICH_CHUNK, FEED_SUMMARY_CHARS, GROQ_BASE_URL,
+    GROQ_MAX_TOKENS, GROQ_MODEL,
 )
 from .sample_data import SAMPLE_ITEMS
-from .schemas import ClientProfile, LLMRadar, LLMRadarItem, Source
-from .sectors import SECTORS, label_for
+from .schemas import ClientProfile, Impact, LLMRadarItem, Source, Status
+from .sectors import SECTORS, VALID_SECTORS, label_for
 
 
 class LLM(Protocol):
@@ -33,54 +34,13 @@ class LLM(Protocol):
 
 
 # --------------------------------------------------------------------------- #
-# Prompt / parsing helpers
+# Enrichment prompt / parsing
 # --------------------------------------------------------------------------- #
-_REGULATORS = "RBI SEBI MeitY NPCI IRDAI FIU-IND CERT-In"
-# The kinds of documents a real regulatory update usually is — steers search
-# toward the actual notification page rather than news or marketing.
-_DOC_TERMS = "circular notification master direction guidelines press release consultation paper"
+_VALID_STATUS = {s.value for s in Status}
+_VALID_IMPACT = {i.value for i in Impact}
 
 
-def _year_hint(start_date: str, end_date: str) -> str:
-    years = sorted({start_date[:4], end_date[:4]})
-    return " ".join(y for y in years if y)
-
-
-def _build_queries(sectors: list[str], query: str | None,
-                   start_date: str, end_date: str) -> list[str]:
-    """Build a few focused search angles rather than one broad query.
-
-    With sub-sectors chosen, one targeted query per sector gives better recall
-    than cramming every label into a single string. With none chosen, we ask
-    broadly for the most significant recent developments.
-    """
-    yrs = _year_hint(start_date, end_date)
-    queries: list[str] = []
-    if sectors:
-        for s in sectors[:MAX_SEARCH_QUERIES]:
-            q = f"India {label_for(s)} regulation {_REGULATORS} {_DOC_TERMS} {yrs}"
-            if query:
-                q += f" {query}"
-            queries.append(" ".join(q.split()))
-    else:
-        base = f"India fintech regulation major update {_REGULATORS} {_DOC_TERMS} {yrs}"
-        if query:
-            base += f" {query}"
-        queries.append(" ".join(base.split()))
-        # A second angle improves recall of fresh circulars/notifications.
-        queries.append(" ".join(f"RBI SEBI new circular notification fintech India {yrs}".split()))
-    return queries
-
-
-def _format_results(results: list[search.SearchResult]) -> str:
-    return "\n\n".join(
-        f"[{i}] Title: {r.title or ''}\nURL: {r.url}\nSnippet: {r.snippet or ''}"
-        for i, r in enumerate(results, start=1)
-    )
-
-
-def _structure_system(sectors: list[str], client: ClientProfile | None,
-                      start_date: str, end_date: str) -> str:
+def _enrich_system(client: ClientProfile | None) -> str:
     sector_ids = ", ".join(SECTORS.keys())
     tailoring = ""
     if client and client.business_types:
@@ -88,38 +48,39 @@ def _structure_system(sectors: list[str], client: ClientProfile | None,
         name = client.name or "the client"
         tailoring = (
             f" The reader advises {name}, whose business involves: {bt}. Where an "
-            "item is relevant, make the action_items specific to them."
-        )
-    focus = ""
-    if not sectors:
-        focus = (
-            " No sub-sector was selected, so cover only the highest-impact, most "
-            "consequential developments across all areas — do not pad with minor items."
+            "item is relevant to them, make the action_items specific to them."
         )
     return (
-        "You turn web search results about Indian fintech regulation into a "
-        "structured list. Respond with ONLY a JSON object (no prose, no code "
+        "You are a legal analyst summarising Indian financial-regulation items "
+        "(from RBI or SEBI) for a lawyer. For EACH numbered item, return a concise "
+        "structured entry. Respond with ONLY a JSON object (no prose, no code "
         "fences) of this shape:\n"
-        '{"items":[{"title":"...","regulator":"RBI|SEBI|MeitY|NPCI|IRDAI|FIU-IND|CERT-In|Other",'
-        '"date":"YYYY-MM-DD","status":"notified|draft|consultation|enforcement",'
-        '"sectors":["<sector id>"],"summary":"...","impact_level":"high|medium|low",'
-        '"affected_entities":["..."],"action_items":["..."],'
-        '"source_url":"...","source_title":"...","source_index":<result number>}]}\n'
-        f"Valid sector ids: {sector_ids}. "
-        f"Only include developments whose date falls between {start_date} and {end_date}; "
-        "put the real publication or notification date in 'date' (YYYY-MM-DD). "
-        "Order items with the most recent and most significant first. "
-        "For each item, set source_index to the [number] of the search result it is based "
-        "on, and copy that result's exact URL into source_url — the specific page for the "
-        "development, never a regulator's homepage." + focus +
-        " Only include real developments supported by the results; do not invent anything. "
-        "Keep summaries short and plain." + tailoring
+        '{"items":[{"index":<number>,"summary":"2-3 plain sentences on what it is '
+        'and what changed","impact_level":"high|medium|low",'
+        '"status":"notified|draft|consultation|enforcement",'
+        '"sectors":["<id>"],"affected_entities":["..."],"action_items":["..."]}]}\n'
+        f"Valid sector ids: {sector_ids}. Pick the ids that fit each item (one or more). "
+        "Impact: high = new or changed obligations, frameworks, master directions, or "
+        "significant circulars affecting many entities; medium = narrower or clarificatory "
+        "changes; low = routine operational notices (securities/treasury auctions, "
+        "sanctions-list or UAPA updates, administrative notices, individual enforcement). "
+        "Base each summary only on the title and description provided; do not invent "
+        "specifics. Return one entry per item, keyed by its index." + tailoring
     )
 
 
-def _parse_items(text: str | None) -> list[LLMRadarItem]:
+def _format_feed_items(items: list) -> str:
+    lines = []
+    for i, f in enumerate(items):
+        desc = (f.summary or "")[:FEED_SUMMARY_CHARS]
+        lines.append(f"[{i}] Regulator: {f.regulator} | Type: {f.source_type}\n"
+                     f"Title: {f.title}\nDescription: {desc}")
+    return "\n\n".join(lines)
+
+
+def _parse_enrichment(text: str | None) -> dict[int, dict]:
     if not text:
-        return []
+        return {}
     t = text.strip()
     t = re.sub(r"^```(?:json)?", "", t).strip()
     t = re.sub(r"```$", "", t).strip()
@@ -127,98 +88,141 @@ def _parse_items(text: str | None) -> list[LLMRadarItem]:
     if start != -1 and end != -1 and end > start:
         t = t[start:end + 1]
     try:
-        return LLMRadar.model_validate(json.loads(t)).items
+        data = json.loads(t)
     except Exception:
-        return []
+        return {}
+    out: dict[int, dict] = {}
+    for entry in data.get("items", []):
+        if isinstance(entry, dict) and isinstance(entry.get("index"), int):
+            out[entry["index"]] = entry
+    return out
 
 
-def _attach_source_links(items: list[LLMRadarItem],
-                         results: list[search.SearchResult]) -> None:
-    """Point each item's source at the exact result URL it cited.
+def _as_date(s: str) -> date:
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return date.today()
 
-    The model references a result by its [number]; we overwrite source_url/title
-    with that result's real deep link so the card never points at a homepage.
-    """
-    for item in items:
-        idx = item.source_index
-        if idx and 1 <= idx <= len(results):
-            r = results[idx - 1]
-            item.source_url = r.url
-            item.source_title = r.title or item.source_title
+
+def _is_auth_error(exc: Exception) -> bool:
+    """True for a 401/403 (bad or missing key) — worth telling the user about."""
+    resp = getattr(exc, "response", None)
+    return getattr(resp, "status_code", None) in (401, 403)
+
+
+def _merge(feed_item, enrich: dict | None) -> LLMRadarItem:
+    """Combine the feed's authoritative fields with the model's judgement."""
+    enrich = enrich or {}
+    status = enrich.get("status")
+    if status not in _VALID_STATUS:
+        status = "enforcement" if feed_item.source_type == "order" else "notified"
+    impact = enrich.get("impact_level")
+    if impact not in _VALID_IMPACT:
+        impact = "medium"
+    sectors = [s for s in (enrich.get("sectors") or []) if s in VALID_SECTORS]
+    summary = (enrich.get("summary") or "").strip() or feed_item.summary or feed_item.title
+    actions = [str(a) for a in (enrich.get("action_items") or []) if str(a).strip()]
+    entities = [str(a) for a in (enrich.get("affected_entities") or []) if str(a).strip()]
+    item_date = feed_item.published.isoformat() if feed_item.published else (feed_item.date_str or "")
+    return LLMRadarItem(
+        title=feed_item.title,
+        regulator=feed_item.regulator,
+        date=item_date,
+        status=status,
+        sectors=sectors,
+        summary=summary,
+        impact_level=impact,
+        affected_entities=entities,
+        action_items=actions,
+        source_url=feed_item.url,
+        source_title=feed_item.title,
+    )
 
 
 # --------------------------------------------------------------------------- #
-# Groq (OpenAI-compatible) + search
+# Groq (OpenAI-compatible) over the RBI / SEBI feeds
 # --------------------------------------------------------------------------- #
 class GroqLLM:
     name = "groq"
 
-    def __init__(self, api_key: str, model: str = GROQ_MODEL,
-                 tavily_key: str | None = None, max_tokens: int = GROQ_MAX_TOKENS):
+    def __init__(self, api_key: str, model: str = GROQ_MODEL, max_tokens: int = GROQ_MAX_TOKENS):
         self.api_key = api_key
         self.model = model
-        self.tavily_key = tavily_key
         self.max_tokens = max_tokens
 
     def scan(self, sectors, start_date, end_date, query, client, max_uses):
-        results = self._gather_results(sectors, query, start_date, end_date)
-        sources = [Source(url=r.url, title=r.title) for r in results]
-        if not results:
+        from . import feeds
+
+        sd, ed = _as_date(start_date), _as_date(end_date)
+        items = []
+        for f in feeds.fetch_feeds():
+            if f.published is not None and not (sd <= f.published <= ed):
+                continue
+            if query and query.lower() not in (f.title + " " + f.summary).lower():
+                continue
+            items.append(f)
+        items.sort(key=lambda f: (f.published or date.min), reverse=True)
+        items = items[:ENRICH_CAP]
+
+        sources = [Source(url=f.url, title=f.title) for f in items]
+        if not items:
             return [], sources
+
+        enriched = self._enrich(items, client)
+        if sectors:
+            want = set(sectors)
+            enriched = [it for it in enriched if set(it.sectors) & want]
+        return enriched, sources
+
+    def _enrich(self, feed_items, client):
+        import time
+
+        system = _enrich_system(client)
+        out: list[LLMRadarItem] = []
+        chunks = [feed_items[i:i + ENRICH_CHUNK] for i in range(0, len(feed_items), ENRICH_CHUNK)]
+        for n, chunk in enumerate(chunks):
+            try:
+                enriched = self._enrich_chunk(chunk, system)
+            except Exception as exc:
+                # A bad or missing key should be reported; a rate limit or hiccup
+                # should not sink the scan — fall back to the feed's own text.
+                if _is_auth_error(exc):
+                    raise
+                enriched = {}
+            for j, f in enumerate(chunk):
+                out.append(_merge(f, enriched.get(j)))
+            if n < len(chunks) - 1:
+                time.sleep(0.6)  # ease the free-tier request rate
+        return out
+
+    def _enrich_chunk(self, chunk, system) -> dict[int, dict]:
+        import time
 
         import requests
 
-        resp = requests.post(
-            f"{GROQ_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "max_tokens": self.max_tokens,
-                "messages": [
-                    {"role": "system",
-                     "content": _structure_system(sectors, client, start_date, end_date)},
-                    {"role": "user", "content": "Search results:\n\n" + _format_results(results)
-                     + "\n\nReturn the JSON now."},
-                ],
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        items = _parse_items(content)
-        _attach_source_links(items, results)
-        return items, sources
-
-    def _gather_results(self, sectors, query, start_date, end_date):
-        """Run each search angle, merge and de-duplicate by URL.
-
-        web_search already retries and falls back from Tavily to DuckDuckGo, so
-        a per-query failure is skipped; only when every angle fails do we let the
-        error surface so the app can report it.
-        """
-        queries = _build_queries(sectors, query, start_date, end_date)
-        per_query = max(4, SEARCH_MAX_RESULTS // max(1, len(queries)))
-        merged: list[search.SearchResult] = []
-        seen: set[str] = set()
-        failures = 0
-        for q in queries:
-            try:
-                hits = search.web_search(q, max_results=per_query, tavily_key=self.tavily_key)
-            except search.SearchError:
-                failures += 1
+        body = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "Items:\n\n" + _format_feed_items(chunk)
+                 + "\n\nReturn the JSON now."},
+            ],
+        }
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        resp = None
+        for attempt in range(3):
+            resp = requests.post(f"{GROQ_BASE_URL}/chat/completions",
+                                 headers=headers, json=body, timeout=60)
+            if resp.status_code == 429 and attempt < 2:
+                wait = resp.headers.get("retry-after")
+                time.sleep(min(float(wait), 12) if wait else 2.0 * (attempt + 1))
                 continue
-            for r in hits:
-                if r.url and r.url not in seen:
-                    seen.add(r.url)
-                    merged.append(r)
-        if not merged and failures:
-            # Every angle failed — run one more so the real error propagates.
-            search.web_search(queries[0], max_results=SEARCH_MAX_RESULTS,
-                              tavily_key=self.tavily_key)
-        return merged[:SEARCH_MAX_RESULTS]
+            break
+        resp.raise_for_status()
+        return _parse_enrichment(resp.json()["choices"][0]["message"]["content"])
 
 
 # --------------------------------------------------------------------------- #
@@ -284,7 +288,7 @@ def default_groq_model(models: list[str]) -> str:
 # Factory
 # --------------------------------------------------------------------------- #
 def get_llm(*, provider: str = "demo", groq_key: str | None = None,
-            tavily_key: str | None = None, model: str | None = None) -> LLM:
+            model: str | None = None) -> LLM:
     if provider == "groq" and groq_key:
-        return GroqLLM(groq_key, model or GROQ_MODEL, tavily_key)
+        return GroqLLM(groq_key, model or GROQ_MODEL)
     return DemoLLM()

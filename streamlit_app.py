@@ -12,7 +12,7 @@ from datetime import date, timedelta
 import streamlit as st
 
 from radar.config import (
-    DEFAULT_MAX_CARDS, DEFAULT_WINDOW_DAYS, MAX_HISTORY_DAYS, MAX_WINDOW_DAYS,
+    DEFAULT_MAX_CARDS, DEFAULT_WINDOW_DAYS, MAX_HISTORY_DAYS,
 )
 from radar.engine import scan
 from radar.llm import default_groq_model, get_llm, list_groq_models
@@ -77,10 +77,6 @@ def groq_key() -> str | None:
     return _secret("GROQ_API_KEY")
 
 
-def tavily_key() -> str | None:
-    return _secret("TAVILY_API_KEY")
-
-
 def e(s: str) -> str:
     return html.escape(str(s or ""))
 
@@ -131,14 +127,13 @@ def render_card(item: RadarItem) -> str:
 # --------------------------------------------------------------------------- #
 st.markdown('<div class="app-title">Fintech Regulatory Radar</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="app-sub">Recent Indian fintech regulatory developments, summarised, '
-    "tagged by sub-sector, scored for impact, with a short note on what to do. "
-    "Optionally tailored to a client's business.</div>",
+    '<div class="app-sub">Recent Indian financial-regulation updates pulled straight from '
+    "the RBI and SEBI feeds, summarised, scored for impact, tagged by area, with a short "
+    "note on what to do. Optionally tailored to a client's business.</div>",
     unsafe_allow_html=True,
 )
 
 grq_key = groq_key()
-tav_key = tavily_key()
 
 # --------------------------------------------------------------------------- #
 # Sidebar controls
@@ -163,7 +158,7 @@ with st.sidebar:
 
     chosen_model = None
     if provider == "groq":
-        st.caption("Search: Tavily" if tav_key else "Search: DuckDuckGo (no key needed)")
+        st.caption("Source: RBI & SEBI official feeds")
         # Load the models this key actually has, so a retired default can't break it.
         if "groq_models" not in st.session_state:
             try:
@@ -191,13 +186,14 @@ with st.sidebar:
         "Date window",
         value=(_today - timedelta(days=DEFAULT_WINDOW_DAYS), _today),
         min_value=_min_day, max_value=_today, format="YYYY-MM-DD",
-        help=f"Pick a start and end date, at most {MAX_WINDOW_DAYS} days apart, "
-             "within the last two years.",
+        help="Pick a start and end date (anywhere in the last two years). The scan "
+             "emphasises this window but still shows the latest developments if the "
+             "window is quiet.",
     )
 
     max_cards = st.number_input(
-        "Max cards to show", min_value=5, max_value=20,
-        value=DEFAULT_MAX_CARDS, step=1,
+        "Max cards to show", min_value=5, max_value=50,
+        value=DEFAULT_MAX_CARDS, step=5,
         help="When a scan finds more developments than this, the most recent and "
              "relevant ones are kept.",
     )
@@ -227,16 +223,14 @@ if run:
     error = None
     if start_date > end_date:
         error = "The start date must be on or before the end date."
-    elif (end_date - start_date).days > MAX_WINDOW_DAYS:
-        error = f"Please choose a window of at most {MAX_WINDOW_DAYS} days."
 
     if error:
         st.error(error)
     else:
         client = ClientProfile(name=client_name or None, business_types=client_sectors) if client_sectors else None
-        llm = get_llm(provider=provider, groq_key=grq_key, tavily_key=tav_key, model=chosen_model)
+        llm = get_llm(provider=provider, groq_key=grq_key, model=chosen_model)
         spinner_msg = "Building the radar from the sample set..." if provider == "demo" \
-            else "Searching for current regulation and building the radar..."
+            else "Pulling the latest RBI and SEBI items and building the radar..."
         try:
             with st.spinner(spinner_msg):
                 result: RadarResult = scan(
@@ -262,12 +256,12 @@ if not result:
     st.stop()
 
 engine_note = "sample data" if result.engine == "demo" else f"model: {result.engine}"
-search_note = " · web search used" if result.web_search_used else ""
+source_note = "" if result.engine == "demo" else " · RBI & SEBI feeds"
 window_note = "full sample set" if result.engine == "demo" \
     else f"{result.start_date} to {result.end_date}"
-st.caption(f"Generated {result.generated_at} · {engine_note}{search_note} · {window_note}")
+st.caption(f"Generated {result.generated_at} · {engine_note}{source_note} · {window_note}")
 if not result.sectors:
-    st.caption("No sub-sector selected — showing the highest-impact updates across all areas.")
+    st.caption("No area selected — showing the highest-impact updates across all areas.")
 
 s = result.stats
 cols = st.columns(5)
