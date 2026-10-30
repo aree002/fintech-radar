@@ -1,10 +1,9 @@
 # Fintech Regulatory Radar
 
-The Radar keeps track of recent Indian fintech regulation. You pick the areas you care about, run
+The Radar tracks recent Indian fintech regulations. You pick the areas you care about, run
 a scan, and it comes back with the latest developments from RBI, SEBI, MeitY, NPCI and the other
 regulators, each one summarised in plain language, tagged by sub-sector, scored for impact, and
-paired with a short note on what the affected businesses need to do. You can also point it at a
-specific client's business so it tells you which items matter to them.
+paired with a short note on what the affected businesses need to do. You can also point it at a specific client's business to see which items would matter most to them.
 
 It is a Streamlit app, so it runs as a single Python program and deploys to Streamlit Community
 Cloud in a few clicks.
@@ -40,41 +39,8 @@ The app has two modes, set in the sidebar.
 - **Live scan** does the web search itself (DuckDuckGo, no key needed) and then uses Groq to
   summarise and structure the results. So all you need is a free Groq key.
 
-Keeping the search and the model separate is deliberate: it means the live scan never runs into a
+Keeping the search and the model separate is deliberate: This is so the live scan never runs into a
 provider's search-grounding quota.
-
-To use live mode locally, copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and
-put your Groq key in it:
-
-```
-GROQ_API_KEY = "..."      # free, no credit card, from https://console.groq.com
-```
-
-Optionally add `TAVILY_API_KEY` for more reliable search than DuckDuckGo (free tier, no card). You
-can also set these as environment variables of the same name. Keys are read on the server side only.
-
-### Deploying on Streamlit Community Cloud
-
-1. Push this folder to a GitHub repository.
-2. On share.streamlit.io, create a new app and point it at `streamlit_app.py`.
-3. In the app's settings, add `GROQ_API_KEY` under Secrets, and optionally `TAVILY_API_KEY`.
-
-That is all it needs. The sample set means the app still shows something even before the key is set.
-
-## How it is laid out
-
-```
-fintech-radar/
-  streamlit_app.py      the app (UI and glue)
-  radar/                the engine
-    sectors.py          the sub-sector list
-    schemas.py          the data shapes
-    sample_data.py      the demo dataset
-    llm.py              live scan (web search + model) and the demo engine
-    engine.py           scoring, client matching, sorting
-  .streamlit/           theme and a secrets template
-  requirements.txt
-```
 
 ## A note
 
