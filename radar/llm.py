@@ -59,11 +59,17 @@ def _enrich_system(client: ClientProfile | None) -> str:
         'and what changed","impact_level":"high|medium|low",'
         '"status":"notified|draft|consultation|enforcement",'
         '"sectors":["<id>"],"affected_entities":["..."],"action_items":["..."]}]}\n'
-        f"Valid sector ids: {sector_ids}. Pick the ids that fit each item (one or more). "
-        "Impact: high = new or changed obligations, frameworks, master directions, or "
-        "significant circulars affecting many entities; medium = narrower or clarificatory "
-        "changes; low = routine operational notices (securities/treasury auctions, "
-        "sanctions-list or UAPA updates, administrative notices, individual enforcement). "
+        f"Valid sector ids: {sector_ids}. Pick the ids that fit each item (one or more).\n"
+        "Score impact_level using these signals, in order of importance:\n"
+        "1. The single most important items are the RELEASE OF A NEW guideline, regulation, "
+        "master direction, framework, scheme or set of directions — score these high. An "
+        "amendment, review, corrigendum, extension of a timeline, or a narrow change to an "
+        "existing rule is less important — usually medium.\n"
+        "2. Longer, more detailed releases tend to be more significant; very short notices "
+        "(about half a page, a low word count) are usually routine — lean lower for those.\n"
+        "3. Routine or administrative items are low: securities/treasury auctions, "
+        "sanctions-list or UAPA updates, district reorganisation, and individual "
+        "enforcement / adjudication / recovery actions against named parties.\n"
         "Base each summary only on the title and description provided; do not invent "
         "specifics. Return one entry per item, keyed by its index." + tailoring
     )
@@ -73,7 +79,8 @@ def _format_feed_items(items: list) -> str:
     lines = []
     for i, f in enumerate(items):
         desc = (f.summary or "")[:FEED_SUMMARY_CHARS]
-        lines.append(f"[{i}] Regulator: {f.regulator} | Type: {f.source_type}\n"
+        lines.append(f"[{i}] Regulator: {f.regulator} | Type: {f.source_type} | "
+                     f"Length: ~{f.word_count} words\n"
                      f"Title: {f.title}\nDescription: {desc}")
     return "\n\n".join(lines)
 
@@ -111,6 +118,41 @@ def _is_auth_error(exc: Exception) -> bool:
     return getattr(resp, "status_code", None) in (401, 403)
 
 
+# Impact heuristics from practising lawyers: a brand-new guideline/regulation is
+# the most important; amendments and routine/administrative notices much less so;
+# longer documents tend to matter more. Encoded as rules so scoring is consistent.
+_LOW_TITLE = re.compile(
+    r"\b(auction|treasury bill|t-bill|sanctions?\s+list|UAPA|UNSC|premature redemption|"
+    r"sovereign gold bond|\bSGB\b|money market operation|liquidity adjustment|"
+    r"reference rate|reorganisation of districts|re-organisation of districts|"
+    r"forex reserves|ways and means)\b", re.I)
+_NEW_TITLE = re.compile(
+    r"\b(master direction|guidelines?|framework|scheme|directions?|regulations?)\b", re.I)
+_AMEND_TITLE = re.compile(
+    r"\b(amendment|review|corrigendum|extension|modif\w*|rationalis\w*)\b", re.I)
+
+
+def _score_impact(feed_item, llm_impact: str) -> str:
+    """Final impact: domain rules first, the model's view where rules are silent."""
+    title = feed_item.title or ""
+    # Individual enforcement against named parties is not a regulatory change.
+    if feed_item.source_type in ("order", "recovery"):
+        return "low"
+    if _LOW_TITLE.search(title):
+        return "low"
+    is_amend = bool(_AMEND_TITLE.search(title))
+    if _NEW_TITLE.search(title) and not is_amend:
+        base = "high"                      # release of a new guideline / regulation
+    elif is_amend:
+        base = "medium"                    # amendments matter less than new rules
+    else:
+        base = llm_impact if llm_impact in _VALID_IMPACT else "medium"
+    # Length as a secondary signal: a long, detailed release is likely significant.
+    if base == "medium" and (feed_item.word_count or 0) >= 1500:
+        base = "high"
+    return base
+
+
 def _merge(feed_item, enrich: dict | None) -> LLMRadarItem:
     """Combine the feed's authoritative fields with the model's judgement."""
     enrich = enrich or {}
@@ -120,6 +162,7 @@ def _merge(feed_item, enrich: dict | None) -> LLMRadarItem:
     impact = enrich.get("impact_level")
     if impact not in _VALID_IMPACT:
         impact = "medium"
+    impact = _score_impact(feed_item, impact)
     sectors = [s for s in (enrich.get("sectors") or []) if s in VALID_SECTORS]
     summary = (enrich.get("summary") or "").strip() or feed_item.summary or feed_item.title
     actions = [str(a) for a in (enrich.get("action_items") or []) if str(a).strip()]
@@ -169,6 +212,7 @@ class GroqLLM:
         if not items:
             return [], sources
 
+        feeds.hydrate(items)  # measure a fair document length for short-text items
         enriched = self._enrich(items, client)
         if sectors:
             want = set(sectors)

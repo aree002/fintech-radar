@@ -1,4 +1,4 @@
-"""Fintech Regulatory Radar — Streamlit app.
+"""Financial Regulatory Radar — Streamlit app.
 
 Run locally:   streamlit run streamlit_app.py
 Deploy:        Streamlit Community Cloud, with GROQ_API_KEY set as a secret.
@@ -19,7 +19,7 @@ from radar.llm import default_groq_model, get_llm, list_groq_models
 from radar.schemas import ClientProfile, RadarItem, RadarResult
 from radar.sectors import SECTORS, label_for
 
-st.set_page_config(page_title="Fintech Regulatory Radar", layout="wide")
+st.set_page_config(page_title="Financial Regulatory Radar", layout="wide")
 
 # --------------------------------------------------------------------------- #
 # Styling
@@ -125,7 +125,7 @@ def render_card(item: RadarItem) -> str:
 # --------------------------------------------------------------------------- #
 # Header
 # --------------------------------------------------------------------------- #
-st.markdown('<div class="app-title">Fintech Regulatory Radar</div>', unsafe_allow_html=True)
+st.markdown('<div class="app-title">Financial Regulatory Radar</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="app-sub">Recent Indian financial-regulation updates pulled straight from '
     "the RBI and SEBI feeds, summarised, scored for impact, tagged by area, with a short "
@@ -261,7 +261,7 @@ window_note = "full sample set" if result.engine == "demo" \
     else f"{result.start_date} to {result.end_date}"
 st.caption(f"Generated {result.generated_at} · {engine_note}{source_note} · {window_note}")
 if not result.sectors:
-    st.caption("No area selected — showing the highest-impact updates across all areas.")
+    st.caption("No area selected — showing the most important recent updates across all areas.")
 
 s = result.stats
 cols = st.columns(5)

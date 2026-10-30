@@ -36,23 +36,10 @@ def scan(
 
     items = [_enrich(ri, idx, client) for idx, ri in enumerate(raw_items)]
 
-    # With no sub-sector chosen, show high-impact items so they are not lost in
-    # the noise — topped up with the most recent medium items if there is room.
-    if not sectors:
-        items = _high_first(items, max_cards)
-
-    # If there are more than we want to show, keep the most relevant and recent.
-    # Items inside the chosen window are preferred, but we do not drop everything
-    # outside it — a sparse window should still show the latest developments.
-    if len(items) > max_cards:
-        items = sorted(
-            items,
-            key=lambda it: (_in_window(it.date, start_date, end_date),
-                            it.relevance_score, _recency(it.date)),
-            reverse=True,
-        )[:max_cards]
-
-    items = _sort(items)
+    # Rank by client relevance, then impact (high first), then recency, and keep
+    # the top max_cards. Important items lead, but routine ones still appear to
+    # fill the view rather than vanishing — so it stays thorough.
+    items = _sort(items)[:max_cards]
 
     return RadarResult(
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -66,17 +53,6 @@ def scan(
         sources=[s for s in sources if s.url],
         stats=_stats(items),
     )
-
-
-def _high_first(items: list[RadarItem], max_cards: int) -> list[RadarItem]:
-    highs = [it for it in items if it.impact_level == Impact.high]
-    if len(highs) >= max_cards:
-        return highs
-    mediums = sorted(
-        (it for it in items if it.impact_level == Impact.medium),
-        key=lambda it: _recency(it.date), reverse=True,
-    )
-    return highs + mediums[: max_cards - len(highs)]
 
 
 def _enrich(ri: LLMRadarItem, idx: int, client: ClientProfile | None) -> RadarItem:
@@ -116,13 +92,6 @@ def _parse_date(date_str: str) -> date | None:
         return datetime.strptime(s[:10], "%Y-%m-%d").date()
     except ValueError:
         return None
-
-
-def _in_window(date_str: str, start: date, end: date) -> bool:
-    d = _parse_date(date_str)
-    if d is None:
-        return True  # keep undated items rather than silently dropping them
-    return start <= d <= end
 
 
 def _recency(date_str: str) -> int:

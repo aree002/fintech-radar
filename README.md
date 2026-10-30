@@ -1,4 +1,4 @@
-# Fintech Regulatory Radar
+# Financial Regulatory Radar
 
 The Radar tracks recent Indian fintech regulations. You pick the areas you care about, run
 a scan, and it comes back with the latest developments from RBI, SEBI, MeitY, NPCI and the other

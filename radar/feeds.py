@@ -17,7 +17,9 @@ from email.utils import parsedate_to_datetime
 
 from pydantic import BaseModel
 
-_UA = {"User-Agent": "Mozilla/5.0 (compatible; FintechRegulatoryRadar/1.0)"}
+from .config import HYDRATE_MIN_WORDS, HYDRATE_TIMEOUT, HYDRATE_WORKERS
+
+_UA = {"User-Agent": "Mozilla/5.0 (compatible; FinancialRegulatoryRadar/1.0)"}
 _TIMEOUT = 30
 
 # (regulator, default item type or None, feed url).
@@ -39,6 +41,7 @@ class FeedItem(BaseModel):
     title: str
     url: str
     summary: str = ""
+    word_count: int = 0          # length of the document — a signal of importance
     published: date | None = None
     date_str: str = ""
 
@@ -103,13 +106,47 @@ def fetch_feeds(regulators: list[str] | None = None) -> list[FeedItem]:
             if stype in _SEBI_SKIP:
                 continue
             seen.add(link)
+            desc = _clean(node.findtext("description"))
             out.append(FeedItem(
                 regulator=reg,
                 source_type=stype,
                 title=_clean(node.findtext("title")) or link,
                 url=link,
-                summary=_clean(node.findtext("description")),
+                summary=desc,
+                word_count=len(desc.split()),
                 published=_parse_date(node.findtext("pubDate")),
                 date_str=(node.findtext("pubDate") or "").strip(),
             ))
     return out
+
+
+def _page_word_count(url: str) -> int | None:
+    """Fetch a page and count the words in its visible text (rough but useful)."""
+    import requests
+
+    try:
+        resp = requests.get(url, headers=_UA, timeout=HYDRATE_TIMEOUT)
+        resp.raise_for_status()
+    except Exception:
+        return None
+    html = re.sub(r"(?is)<(script|style|nav|header|footer)[^>]*>.*?</\1>", " ", resp.text)
+    text = re.sub(r"(?s)<[^>]+>", " ", html)
+    return len(re.sub(r"\s+", " ", text).split())
+
+
+def hydrate(items: list[FeedItem]) -> None:
+    """Fill in a real word count for items whose feed text is short (e.g. SEBI).
+
+    Done concurrently and best-effort: a page that fails to load keeps its feed
+    word count. Mutates the items in place.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    short = [it for it in items if it.word_count < HYDRATE_MIN_WORDS]
+    if not short:
+        return
+    with ThreadPoolExecutor(max_workers=HYDRATE_WORKERS) as pool:
+        counts = pool.map(_page_word_count, [it.url for it in short])
+    for it, count in zip(short, counts):
+        if count:
+            it.word_count = count
