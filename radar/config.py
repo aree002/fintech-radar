@@ -16,14 +16,17 @@ DEFAULT_MAX_CARDS = 15
 # Feed enrichment: the LLM summarises/scores items pulled from the feeds.
 ENRICH_CAP = 36              # most feed items to process per scan (newest first)
 ENRICH_CHUNK = 12            # items summarised per LLM call (fewer calls = fewer rate limits)
-FEED_SUMMARY_CHARS = 400     # trim each feed item's description in the prompt
+FEED_SUMMARY_CHARS = 700     # content per item fed to the model for the summary
 
-# Document length is a signal of importance (longer releases tend to matter more).
-# RBI feeds carry full text; SEBI feeds carry short abstracts, so we fetch the SEBI
-# pages to measure a comparable length. Best-effort, concurrent, time-bounded.
-HYDRATE_MIN_WORDS = 60       # fetch the page only when the feed text is this short
+# RBI feeds carry each notification's full text. SEBI feeds carry only the title,
+# so for SEBI we fetch the circular's PDF to get its real text (for richer
+# summaries) and a comparable length (for impact). Best-effort, concurrent, bounded.
+HYDRATE_MIN_WORDS = 60       # hydrate items whose feed text is shorter than this
+HYDRATE_CAP = 18             # hydrate at most this many items per scan (newest first)
 HYDRATE_WORKERS = 8
-HYDRATE_TIMEOUT = 15
+HYDRATE_TIMEOUT = 20
+PDF_MAX_PAGES = 4            # read at most this many PDF pages
+PDF_MAX_CHARS = 5000         # and at most this much text
 
 # Groq (OpenAI-compatible endpoint), free tier, no credit card.
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"

@@ -1,3 +1,4 @@
 streamlit>=1.39
 pydantic>=2.6
 requests>=2.31    # fetches the RBI/SEBI RSS feeds and calls Groq (OpenAI-compatible REST)
+pypdf>=4.0        # reads SEBI circular PDFs for richer summaries (pure Python)

@@ -10,6 +10,7 @@ covers current regulation well but does not reach deep into history.
 """
 from __future__ import annotations
 
+import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import date, datetime
@@ -17,10 +18,16 @@ from email.utils import parsedate_to_datetime
 
 from pydantic import BaseModel
 
-from .config import HYDRATE_MIN_WORDS, HYDRATE_TIMEOUT, HYDRATE_WORKERS
+from .config import (
+    HYDRATE_CAP, HYDRATE_MIN_WORDS, HYDRATE_TIMEOUT, HYDRATE_WORKERS,
+    PDF_MAX_CHARS, PDF_MAX_PAGES,
+)
 
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; FinancialRegulatoryRadar/1.0)"}
 _TIMEOUT = 30
+
+# pypdf is noisy about malformed PDFs we already handle; keep the logs quiet.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 # (regulator, default item type or None, feed url).
 # SEBI's single feed carries several item types, derived per-item from the URL.
@@ -40,7 +47,8 @@ class FeedItem(BaseModel):
     source_type: str
     title: str
     url: str
-    summary: str = ""
+    summary: str = ""            # short abstract from the feed (display fallback)
+    content: str = ""            # full text used for the summary + length signal
     word_count: int = 0          # length of the document — a signal of importance
     published: date | None = None
     date_str: str = ""
@@ -113,6 +121,7 @@ def fetch_feeds(regulators: list[str] | None = None) -> list[FeedItem]:
                 title=_clean(node.findtext("title")) or link,
                 url=link,
                 summary=desc,
+                content=desc,
                 word_count=len(desc.split()),
                 published=_parse_date(node.findtext("pubDate")),
                 date_str=(node.findtext("pubDate") or "").strip(),
@@ -120,33 +129,64 @@ def fetch_feeds(regulators: list[str] | None = None) -> list[FeedItem]:
     return out
 
 
-def _page_word_count(url: str) -> int | None:
-    """Fetch a page and count the words in its visible text (rough but useful)."""
+def _pdf_text(url: str) -> str:
+    """Download a PDF and return its text (first few pages, bounded)."""
+    import io
+
+    import pypdf
+    import requests
+
+    resp = requests.get(url, headers=_UA, timeout=HYDRATE_TIMEOUT)
+    resp.raise_for_status()
+    reader = pypdf.PdfReader(io.BytesIO(resp.content))
+    parts, total = [], 0
+    for page in reader.pages[:PDF_MAX_PAGES]:
+        text = page.extract_text() or ""
+        parts.append(text)
+        total += len(text)
+        if total >= PDF_MAX_CHARS:
+            break
+    return re.sub(r"\s+", " ", " ".join(parts)).strip()[:PDF_MAX_CHARS]
+
+
+def _doc_content(page_url: str) -> str | None:
+    """Fetch an item's page, find its attached PDF, and return the PDF's text.
+
+    This is how SEBI (and RBI, when needed) expose the real document body — the
+    HTML page itself is just a shell. Best-effort; returns None on any failure.
+    """
     import requests
 
     try:
-        resp = requests.get(url, headers=_UA, timeout=HYDRATE_TIMEOUT)
+        resp = requests.get(page_url, headers=_UA, timeout=HYDRATE_TIMEOUT)
         resp.raise_for_status()
+        # Prefer the actual document store (SEBI attachments / RBI docs) over any
+        # other PDF on the page (accessibility statements, logos, etc.).
+        m = (re.search(r'https?://[^"\'\s<>]+/(?:sebi_data/attachdocs|rdocs|content)/[^"\'\s<>]+\.pdf',
+                       resp.text, re.I)
+             or re.search(r'https?://[^"\'\s<>]+\.pdf', resp.text, re.I))
+        if not m:
+            return None
+        return _pdf_text(m.group(0))
     except Exception:
         return None
-    html = re.sub(r"(?is)<(script|style|nav|header|footer)[^>]*>.*?</\1>", " ", resp.text)
-    text = re.sub(r"(?s)<[^>]+>", " ", html)
-    return len(re.sub(r"\s+", " ", text).split())
 
 
 def hydrate(items: list[FeedItem]) -> None:
-    """Fill in a real word count for items whose feed text is short (e.g. SEBI).
+    """Pull the real document text for items whose feed text is short (e.g. SEBI).
 
-    Done concurrently and best-effort: a page that fails to load keeps its feed
-    word count. Mutates the items in place.
+    Fetches the attached PDF, concurrently and best-effort: an item that fails to
+    load keeps its feed text. Updates content and word_count in place. Limited to
+    the newest HYDRATE_CAP short items so a scan stays reasonably fast.
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    short = [it for it in items if it.word_count < HYDRATE_MIN_WORDS]
+    short = [it for it in items if it.word_count < HYDRATE_MIN_WORDS][:HYDRATE_CAP]
     if not short:
         return
     with ThreadPoolExecutor(max_workers=HYDRATE_WORKERS) as pool:
-        counts = pool.map(_page_word_count, [it.url for it in short])
-    for it, count in zip(short, counts):
-        if count:
-            it.word_count = count
+        texts = pool.map(_doc_content, [it.url for it in short])
+    for it, text in zip(short, texts):
+        if text:
+            it.content = text
+            it.word_count = len(text.split())

@@ -70,7 +70,7 @@ def _enrich_system(client: ClientProfile | None) -> str:
         "3. Routine or administrative items are low: securities/treasury auctions, "
         "sanctions-list or UAPA updates, district reorganisation, and individual "
         "enforcement / adjudication / recovery actions against named parties.\n"
-        "Base each summary only on the title and description provided; do not invent "
+        "Base each summary only on the title and text provided; do not invent "
         "specifics. Return one entry per item, keyed by its index." + tailoring
     )
 
@@ -78,10 +78,10 @@ def _enrich_system(client: ClientProfile | None) -> str:
 def _format_feed_items(items: list) -> str:
     lines = []
     for i, f in enumerate(items):
-        desc = (f.summary or "")[:FEED_SUMMARY_CHARS]
+        text = (f.content or f.summary or "")[:FEED_SUMMARY_CHARS]
         lines.append(f"[{i}] Regulator: {f.regulator} | Type: {f.source_type} | "
                      f"Length: ~{f.word_count} words\n"
-                     f"Title: {f.title}\nDescription: {desc}")
+                     f"Title: {f.title}\nText: {text}")
     return "\n\n".join(lines)
 
 
@@ -164,7 +164,8 @@ def _merge(feed_item, enrich: dict | None) -> LLMRadarItem:
         impact = "medium"
     impact = _score_impact(feed_item, impact)
     sectors = [s for s in (enrich.get("sectors") or []) if s in VALID_SECTORS]
-    summary = (enrich.get("summary") or "").strip() or feed_item.summary or feed_item.title
+    summary = ((enrich.get("summary") or "").strip()
+               or (feed_item.content or feed_item.summary or feed_item.title)[:400])
     actions = [str(a) for a in (enrich.get("action_items") or []) if str(a).strip()]
     entities = [str(a) for a in (enrich.get("affected_entities") or []) if str(a).strip()]
     item_date = feed_item.published.isoformat() if feed_item.published else (feed_item.date_str or "")
