@@ -7,3 +7,8 @@ font = "sans serif"
 
 [server]
 headless = true
+
+[client]
+# Hide the top-right "Deploy" button and developer tools (deploy via
+# share.streamlit.io instead).
+toolbarMode = "viewer"
