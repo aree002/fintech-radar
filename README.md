@@ -42,6 +42,20 @@ The app has two modes, set in the sidebar.
 Keeping the search and the model separate is deliberate: This is so the live scan never runs into a
 provider's search-grounding quota.
 
+### Locking the app behind a login
+
+A deployed app is reachable by anyone with the link, and each scan uses your keys. To keep it to
+yourself, set a username and password in secrets (locally in `.streamlit/secrets.toml`, or on
+Streamlit Community Cloud under the app's Secrets settings):
+
+```
+APP_USERNAME = "..."
+APP_PASSWORD = "..."
+```
+
+With both set, the app asks for them before anything else. Leave them unset and the app runs open,
+which is convenient while developing locally.
+
 ## A note
 
 The Radar is a monitoring aid for a qualified lawyer. It points at things worth a closer look. It

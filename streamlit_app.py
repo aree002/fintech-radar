@@ -5,6 +5,7 @@ Deploy:        Streamlit Community Cloud, with ANTHROPIC_API_KEY set as a secret
 """
 from __future__ import annotations
 
+import hmac
 import html
 import os
 
@@ -78,6 +79,43 @@ def tavily_key() -> str | None:
     return _secret("TAVILY_API_KEY")
 
 
+def require_login() -> bool:
+    """Gate the app behind a username and password when they are configured.
+
+    Credentials are read from secrets/env (APP_USERNAME, APP_PASSWORD). If no
+    password is set, the app runs open — convenient for local use. Set both in
+    the deployed app's Secrets so only you can run scans against your keys.
+    """
+    expected_user = _secret("APP_USERNAME")
+    expected_pass = _secret("APP_PASSWORD")
+
+    # No password configured: no gate (e.g. local development).
+    if not expected_pass:
+        return True
+
+    if st.session_state.get("auth_ok"):
+        return True
+
+    st.markdown('<div class="app-title">Fintech Regulatory Radar</div>', unsafe_allow_html=True)
+    st.caption("Please sign in to continue.")
+    with st.form("login", clear_on_submit=False):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in")
+
+    if submitted:
+        # compare_digest guards against timing attacks; check both when a
+        # username is configured, otherwise the password alone.
+        user_ok = (not expected_user) or hmac.compare_digest(username or "", expected_user)
+        pass_ok = hmac.compare_digest(password or "", expected_pass)
+        if user_ok and pass_ok:
+            st.session_state["auth_ok"] = True
+            st.rerun()
+        st.error("Incorrect username or password.")
+
+    return False
+
+
 def e(s: str) -> str:
     return html.escape(str(s or ""))
 
@@ -122,6 +160,12 @@ def render_card(item: RadarItem) -> str:
     </div>
     """
 
+
+# --------------------------------------------------------------------------- #
+# Login gate (active only when APP_PASSWORD is configured)
+# --------------------------------------------------------------------------- #
+if not require_login():
+    st.stop()
 
 # --------------------------------------------------------------------------- #
 # Header
